@@ -18,22 +18,50 @@
 #
 # Usage: $ path/to/greeter_client.rb
 
-this_dir = File.expand_path(File.dirname(__FILE__))
+this_dir = __dir__
 lib_dir = File.join(this_dir, 'lib')
 $LOAD_PATH.unshift(lib_dir) unless $LOAD_PATH.include?(lib_dir)
 
 require 'grpc'
 require 'helloworld_services_pb'
 
-def main
-  user = ARGV.size > 0 ?  ARGV[0] : 'world'
-  hostname = ARGV.size > 1 ?  ARGV[1] : 'localhost:50051'
+# GRPC_ENABLE_FORK_SUPPORT=1 ruby greeter_client.rb
+
+def test_fork(_user, hostname)
+  p "GRPC VERSION: #{GRPC::VERSION}"
   stub = Helloworld::Greeter::Stub.new(hostname, :this_channel_is_insecure)
-  begin
-    message = stub.say_hello(Helloworld::HelloRequest.new(name: user)).message
+  message = stub.say_hello(Helloworld::HelloRequest.new(name: 'prefork parent')).message
+  p "Greeting: #{message}"
+
+  GRPC.prefork
+  pid = fork do
+    GRPC.postfork_child
+    message = stub.say_hello(Helloworld::HelloRequest.new(name: 'postfork child')).message
     p "Greeting: #{message}"
-  rescue GRPC::BadStatus => e
-    abort "ERROR: #{e.message}"
+    exit(0)
+  end
+
+  GRPC.postfork_parent
+  message = stub.say_hello(Helloworld::HelloRequest.new(name: 'postfork parent')).message
+  p "pid: #{pid}"
+  p "Greeting: #{message}"
+
+  Process.wait(pid)
+end
+
+def sanity_check(user, hostname)
+  stub = Helloworld::Greeter::Stub.new(hostname, :this_channel_is_insecure)
+  message = stub.say_hello(Helloworld::HelloRequest.new(name: user)).message
+  p "Greeting: #{message}"
+end
+
+def main
+  user = ARGV.size > 0 ? ARGV[0] : 'world'
+  hostname = ARGV.size > 1 ? ARGV[1] : 'localhost:50051'
+  # sanity_check(user, hostname)
+
+  for i in 0..1000
+    test_fork(user, hostname)
   end
 end
 
